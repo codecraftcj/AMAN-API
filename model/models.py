@@ -1,17 +1,29 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from repository.database import Base
 import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
 class User(Base):
     __tablename__ = 'users'
+    
     id = Column(Integer, primary_key=True)
-    name = Column(String(50), unique=True)
-    email = Column(String(120), unique=True)
-
-    def __init__(self, name=None, email=None):
+    name = Column(String(50), unique=True, nullable=False)
+    email = Column(String(120), unique=True, nullable=False)
+    password_hash = Column(String(128), nullable=False)  # Stores the hashed password
+    
+    def __init__(self, name, email, password):
         self.name = name
         self.email = email
-
+        self.set_password(password)  # Hashes the password and stores it
+    
+    def set_password(self, password):
+        """Hashes the password and stores it."""
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password):
+        """Verifies the password against the stored hash."""
+        return check_password_hash(self.password_hash, password)
+    
     def __repr__(self):
         return f'<User {self.name!r}>'
 

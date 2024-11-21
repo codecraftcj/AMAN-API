@@ -3,10 +3,17 @@ from repository.database import init_db, db_session
 from model.models import User, WaterParameters, JobQueue
 import os
 import datetime
-
+from datetime import timedelta
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required, get_jwt_identity
+)
 init_db()
 
 app = Flask(__name__)
+
+# Configure application with a secret key and JWT settings
+app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
 
 @app.route("/")
 def hello_world():
@@ -158,6 +165,58 @@ def delete_job(job_id):
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
+
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not all([name, email, password]):
+        return jsonify({"msg": "Missing parameters"}), 400  # Bad Request
+    
+    if db_session.query(User).filter_by(email=email).first():
+        return jsonify({"msg": "User already exists"}), 409  # Conflict
+    
+    new_user = User(name=name, email=email, password=password)
+    db_session.add(new_user)
+    db_session.commit()
+    
+    return jsonify({"msg": "User created successfully"}), 201  # Created
+
+@app.route('/login', methods=['POST'])
+def login():
+
+    data = request.get_json()
+    
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not all([email, password]):
+        return jsonify({"msg": "Missing parameters"}), 400  # Bad Request
+    
+    user = db_session.query(User).filter_by(email=email).first()
+    
+    if not user or not user.check_password(password):
+        return jsonify({"msg": "Bad email or password"}), 401  # Unauthorized
+    
+    token = create_access_token(identity=user.id)
+    return jsonify(token=token), 200
+
+@app.route('/protected', methods=['GET'])
+@jwt_required()
+def protected():
+
+    current_user_id = get_jwt_identity()
+    user = db_session.query(User).get(current_user_id)
+    
+    if not user:
+        return jsonify({"msg": "User not found"}), 404  # Not Found
+    
+    return jsonify(logged_in_as=user.name), 200
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
