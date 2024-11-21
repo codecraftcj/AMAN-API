@@ -7,6 +7,7 @@ from datetime import timedelta
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
 )
+
 init_db()
 
 app = Flask(__name__)
@@ -14,6 +15,9 @@ app = Flask(__name__)
 # Configure application with a secret key and JWT settings
 app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
+
+# Initialize JWTManager
+jwt = JWTManager(app)
 
 @app.route("/")
 def hello_world():
@@ -166,7 +170,6 @@ def delete_job(job_id):
     finally:
         db_session.close()
 
-
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -189,7 +192,6 @@ def register():
 
 @app.route('/login', methods=['POST'])
 def login():
-
     data = request.get_json()
     
     email = data.get('email')
@@ -203,15 +205,17 @@ def login():
     if not user or not user.check_password(password):
         return jsonify({"msg": "Bad email or password"}), 401  # Unauthorized
     
-    token = create_access_token(identity=user.id)
+    token = create_access_token(identity=str(user.id))
     return jsonify(token=token), 200
 
 @app.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
-
     current_user_id = get_jwt_identity()
-    user = db_session.query(User).get(current_user_id)
+    print(f"Current User ID: {current_user_id}")
+    
+    # Ensure `current_user_id` is used as a string
+    user = db_session.query(User).get(current_user_id)  
     
     if not user:
         return jsonify({"msg": "User not found"}), 404  # Not Found
