@@ -7,11 +7,14 @@ from datetime import timedelta
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
 )
+from flask_cors import CORS
+from flask import Flask, jsonify
+
 
 init_db()
 
 app = Flask(__name__)
-
+CORS(app)
 # Configure application with a secret key and JWT settings
 app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
@@ -21,7 +24,7 @@ jwt = JWTManager(app)
 
 @app.route("/")
 def hello_world():
-    return "<p>Hello, World!</p>"
+    return jsonify({"message": "You have reached the Terminal Web App!"})
 
 @app.route("/adduser/<user>")
 def add_user(user):
