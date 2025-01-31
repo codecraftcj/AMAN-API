@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from repository.database import init_db, db_session
-from model.models import User, WaterParameters, JobQueue
+from model.models import User, WaterParameters, JobQueue,Device
 import os
 import datetime
 from datetime import timedelta
@@ -225,6 +225,92 @@ def protected():
     
     return jsonify(logged_in_as=user.name), 200
 
+# Device registration route
+@app.route("/device/register", methods=["POST"])
+def register_device():
+    try:
+        data = request.get_json()
+        if "device_id" not in data:
+            return jsonify({"error": "Missing required field: device_id"}), 400
+
+        device = db_session.query(Device).filter_by(device_id=data["device_id"]).first()
+
+        if device:
+            device.last_active = datetime.datetime.utcnow()
+            db_session.commit()
+            return jsonify({"message": "Device updated as active", "device_id": device.device_id}), 200
+
+        new_device = Device(device_id=data["device_id"], is_registered=False)
+        db_session.add(new_device)
+        db_session.commit()
+
+        return jsonify({"message": "Device registered as active but not yet officially registered", "device_id": new_device.device_id}), 201
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+# Set device as registered
+@app.route("/device/set-registered/<device_id>", methods=["PUT"])
+def set_device_registered(device_id):
+    try:
+        device = db_session.query(Device).filter_by(device_id=device_id).first()
+
+        if not device:
+            return jsonify({"message": "Device not found"}), 404
+
+        device.is_registered = True
+        db_session.commit()
+
+        return jsonify({"message": "Device successfully registered", "device_id": device.device_id}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+# Get all devices
+@app.route("/devices", methods=["GET"])
+def get_devices():
+    try:
+        devices = db_session.query(Device).all()
+        serialized_devices = [
+            {
+                "id": device.id,
+                "device_id": device.device_id,
+                "is_registered": device.is_registered,
+                "last_active": device.last_active.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            for device in devices
+        ]
+        return jsonify(serialized_devices), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Device ping route (to update last active timestamp)
+@app.route("/device/present", methods=["POST"])
+def device_present():
+    try:
+        data = request.get_json()
+        if "device_id" not in data:
+            return jsonify({"error": "Missing required field: device_id"}), 400
+
+        device = db_session.query(Device).filter_by(device_id=data["device_id"]).first()
+
+        if not device:
+            return jsonify({"message": "Device not found"}), 404
+
+        device.last_active = datetime.datetime.utcnow()
+        db_session.commit()
+
+        return jsonify({"message": "Device presence updated", "device_id": device.device_id}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+        
 # @TODO: connect to GUI 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

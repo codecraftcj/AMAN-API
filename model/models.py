@@ -48,3 +48,17 @@ class JobQueue(Base):
 
     def __repr__(self):
         return f'<JobQueue {self.job_name!r}, is_completed={self.is_completed}>'
+
+class Device(Base):
+    __tablename__ = 'devices'
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(100), unique=True, nullable=False)
+    is_registered = Column(Boolean, default=False)
+    last_active = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def __init__(self, device_id, is_registered=False):
+        self.device_id = device_id
+        self.is_registered = is_registered
+
+    def __repr__(self):
+        return f'<Device {self.device_id!r}, is_registered={self.is_registered}, last_active={self.last_active}>'
