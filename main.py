@@ -36,7 +36,16 @@ def add_user(user):
 @app.route("/get-water-parameters", methods=["GET"])
 def get_water_parameters():
     try:
-        data = db_session.query(WaterParameters).all()
+
+        limit = request.args.get("limit", default=10, type=int)  # Default to latest 10 records
+        
+        data = (
+            db_session.query(WaterParameters)
+            .order_by(WaterParameters.created_date.desc())  # Get the latest first
+            .limit(limit)
+            .all()
+        )
+
         serialized_data = [
             {
                 "id": param.id,
@@ -49,8 +58,10 @@ def get_water_parameters():
             for param in data
         ]
         return jsonify(serialized_data), 200
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route('/set_water_parameters', methods=['POST'])
 def set_water_parameters():
