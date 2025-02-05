@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, render_template
 from repository.database import init_db, db_session
 from model.models import User, WaterParameters, JobQueue,Device
 import os
@@ -8,8 +8,9 @@ from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
 )
 from flask_cors import CORS
-from flask import Flask, jsonify
-
+import cv2
+import threading
+import numpy as np
 
 init_db()
 
@@ -21,6 +22,29 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
 
 # Initialize JWTManager
 jwt = JWTManager(app)
+
+# Initialize video capture (0 for default webcam)
+video_capture = cv2.VideoCapture(0)
+frame_lock = threading.Lock()
+latest_frame = None  # Stores the latest frame received
+
+
+def generate_frames():
+    """ Continuously stream the latest received frame """
+    global latest_frame
+
+    while True:
+        with frame_lock:
+            if latest_frame is None:
+                continue  # No frame available yet
+
+            # Encode frame as JPEG
+            _, buffer = cv2.imencode('.jpg', latest_frame)
+            frame_bytes = buffer.tobytes()
+
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
 
 @app.route("/")
 def hello_world():
@@ -322,6 +346,28 @@ def device_present():
     finally:
         db_session.close()
         
+@app.route('/receive-video-feed', methods=['POST'])
+def receive_video_feed():
+    global latest_frame
+
+    if 'frame' not in request.files:
+        return "No frame received", 400
+
+    # Read the uploaded frame (JPEG format)
+    file = request.files['frame'].read()
+    np_img = np.frombuffer(file, np.uint8)
+    frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
+    with frame_lock:
+        latest_frame = frame  # Update the latest frame
+
+    return "Frame received", 200
+
+
+@app.route('/video-feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 # @TODO: connect to GUI 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
