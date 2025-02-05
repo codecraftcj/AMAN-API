@@ -20,12 +20,12 @@ Install the required dependencies using pip:
 ```sh
 pip install -r requirements.txt
 ```
-### 4. Run the Flask Application
+### 3. Run the Flask Application
 Start the Flask application.
 ```sh
 py main.py
 ```
-### 5. Generate Test Data
+### 4. Generate Test Data
 Run the `set_test_data.py` script to reset the database and add test data. This will drop all existing tables, recreate them, and populate the database with test users, water parameters, and devices.
 
 ---
