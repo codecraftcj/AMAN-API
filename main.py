@@ -11,7 +11,7 @@ from flask_cors import CORS
 import cv2
 import threading
 import numpy as np
-
+from model.DeviceConnections import DeviceConnection
 init_db()
 
 app = Flask(__name__)
@@ -27,7 +27,8 @@ jwt = JWTManager(app)
 video_capture = cv2.VideoCapture(0)
 frame_lock = threading.Lock()
 latest_frame = None  # Stores the latest frame received
-
+available_devices = {}
+device_connections = {}
 
 def generate_frames():
     """ Continuously stream the latest received frame """
@@ -87,28 +88,36 @@ def get_water_parameters():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/set_water_parameters', methods=['POST'])
+@app.route('/set-water-parameters', methods=['POST'])
 def set_water_parameters():
     try:
         data = request.get_json()
-        required_fields = ['temperature', 'turbidity', 'ph_level', 'hydrogen_sulfide_level']
+        required_fields = ['device_id', 'temperature', 'turbidity', 'ph_level', 'hydrogen_sulfide_level']
+        
+        # Validate required fields
         for field in required_fields:
-            if field not in data:
+            if field not in data or data[field] is None:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
-
+        
+        # Create new water parameter entry
         new_parameters = WaterParameters(
+            device_id=data['device_id'],  # Store device ID
             temperature=data['temperature'],
             turbidity=data['turbidity'],
             ph_level=data['ph_level'],
             hydrogen_sulfide_level=data['hydrogen_sulfide_level']
         )
+        
+        # Save to database
         db_session.add(new_parameters)
         db_session.commit()
 
         return jsonify({'message': 'Water parameters added successfully', 'id': new_parameters.id}), 201
+
     except Exception as e:
         db_session.rollback()
         return jsonify({'error': str(e)}), 500
+
     finally:
         db_session.close()
 
@@ -125,7 +134,8 @@ def get_latest_water_parameters():
             "turbidity": latest_param.turbidity,
             "ph_level": latest_param.ph_level,
             "hydrogen_sulfide_level": latest_param.hydrogen_sulfide_level,
-            "created_date": latest_param.created_date.strftime('%Y-%m-%d %H:%M:%S')
+            "created_date": latest_param.created_date.strftime('%Y-%m-%d %H:%M:%S'),
+            "device_id":latest_param.device_id
         }
 
         return jsonify(serialized_data), 200
@@ -138,10 +148,14 @@ def get_latest_water_parameters():
 def add_job():
     try:
         data = request.get_json()
-        if "job_name" not in data:
-            return jsonify({'error': 'Missing required field: job_name'}), 400
+        required_fields = ["job_name", "device_id"]
+        
+        # Ensure required fields exist
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
 
-        new_job = JobQueue(job_name=data['job_name'])
+        new_job = JobQueue(job_name=data['job_name'], device_id=data['device_id'])
         db_session.add(new_job)
         db_session.commit()
 
@@ -151,6 +165,7 @@ def add_job():
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
+
 
 @app.route("/get-jobs", methods=["GET"])
 def get_jobs():
@@ -260,50 +275,7 @@ def protected():
     
     return jsonify(logged_in_as=user.name), 200
 
-# Device registration route
-@app.route("/device/register", methods=["POST"])
-def register_device():
-    try:
-        data = request.get_json()
-        if "device_id" not in data:
-            return jsonify({"error": "Missing required field: device_id"}), 400
 
-        device = db_session.query(Device).filter_by(device_id=data["device_id"]).first()
-
-        if device:
-            device.last_active = datetime.datetime.utcnow()
-            db_session.commit()
-            return jsonify({"message": "Device updated as active", "device_id": device.device_id}), 200
-
-        new_device = Device(device_id=data["device_id"], is_registered=False)
-        db_session.add(new_device)
-        db_session.commit()
-
-        return jsonify({"message": "Device registered as active but not yet officially registered", "device_id": new_device.device_id}), 201
-    except Exception as e:
-        db_session.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        db_session.close()
-
-# Set device as registered
-@app.route("/device/set-registered/<device_id>", methods=["PUT"])
-def set_device_registered(device_id):
-    try:
-        device = db_session.query(Device).filter_by(device_id=device_id).first()
-
-        if not device:
-            return jsonify({"message": "Device not found"}), 404
-
-        device.is_registered = True
-        db_session.commit()
-
-        return jsonify({"message": "Device successfully registered", "device_id": device.device_id}), 200
-    except Exception as e:
-        db_session.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        db_session.close()
 
 # Get all devices
 @app.route("/devices", methods=["GET"])
@@ -368,6 +340,77 @@ def receive_video_feed():
 def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# @TODO: connect to GUI 
+@app.route("/device/set-registered/<device_id>", methods=["PUT"])
+def set_device_registered(device_id):
+    try:
+        device = db_session.query(Device).filter_by(device_id=device_id).first()
+
+        if not device:
+            return jsonify({"message": "Device not found"}), 404
+
+        # Assuming the device IP is stored in the database or can be derived
+        device_ip = f"192.168.1.{device.id}"  # Example; Replace with actual method to get device IP
+
+        # Create a new device connection
+        device_conn = DeviceConnection(device_id, device_ip)
+        if device_conn.connect():
+            device_connections[device_id] = device_conn
+        else:
+            return jsonify({"error": "Failed to connect to device"}), 500
+
+        device.is_registered = True
+        db_session.commit()
+
+        return jsonify({"message": "Device successfully registered and connected", "device_id": device.device_id}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+@app.route('/register_device', methods=['POST'])
+def register_device():
+    """Receives device announcements and stores them as available devices."""
+    try:
+        data = request.get_json()
+        device_id = data.get("device_id")
+        local_ip = data.get("local_ip")
+
+        if not device_id or not local_ip:
+            return jsonify({"error": "Missing device ID or IP"}), 400
+
+        available_devices[device_id] = {"local_ip": local_ip, "status": "available"}
+
+        return jsonify({"message": "Device registered as available", "device_id": device_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/get_available_devices', methods=['GET'])
+def get_available_devices():
+    """Returns a list of available devices that can be registered."""
+    return jsonify(available_devices), 200
+
+@app.route('/confirm_device', methods=['POST'])
+def confirm_device():
+    """Confirms a device and adds it to the database."""
+    try:
+        data = request.get_json()
+        device_id = data.get("device_id")
+        if device_id not in available_devices:
+            return jsonify({"error": "Device not found"}), 404
+
+        device_info = available_devices.pop(device_id)
+        print(device_info)
+        new_device = Device(device_id=device_id, local_ip=device_info["local_ip"])
+        db_session.add(new_device)
+        db_session.commit()
+
+        return jsonify({"message": f"Device {device_id} confirmed and added"}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

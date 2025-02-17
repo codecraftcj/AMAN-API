@@ -28,26 +28,36 @@ class User(Base):
         return f'<User {self.name!r}>'
 
 class WaterParameters(Base):
-    __tablename__='water_quality_parameters'
-    id = Column(Integer, primary_key=True)
-    temperature = Column(Integer)
-    turbidity = Column(Integer)
-    ph_level = Column(Integer)
-    hydrogen_sulfide_level = Column(Integer)
+    __tablename__ = 'water_quality_parameters'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    device_id = Column(String, nullable=False)  # Device ID associated with the entry
+    temperature = Column(Integer, nullable=False)
+    turbidity = Column(Integer, nullable=False)
+    ph_level = Column(Integer, nullable=False)
+    hydrogen_sulfide_level = Column(Integer, nullable=False)
     created_date = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def __repr__(self):
+        return (f"<WaterParameters(id={self.id}, device_id='{self.device_id}', "
+                f"temperature={self.temperature}, turbidity={self.turbidity}, "
+                f"ph_level={self.ph_level}, hydrogen_sulfide_level={self.hydrogen_sulfide_level}, "
+                f"created_date={self.created_date})>")
 
 class JobQueue(Base):
     __tablename__ = 'job_queue'
     id = Column(Integer, primary_key=True)
     job_name = Column(String(100))
     is_completed = Column(Boolean, default=False)
+    device_id = Column(String(100), nullable=False)  # Ensure device_id is required
     created_date = Column(DateTime, default=datetime.datetime.utcnow)
 
-    def __init__(self, job_name=None):
+    def __init__(self, job_name=None, device_id=None):
         self.job_name = job_name
+        self.device_id = device_id  # Include device_id in the constructor
 
     def __repr__(self):
-        return f'<JobQueue {self.job_name!r}, is_completed={self.is_completed}>'
+        return f'<JobQueue {self.job_name!r}, is_completed={self.is_completed}, device_id={self.device_id!r}>'
 
 class Device(Base):
     __tablename__ = 'devices'
