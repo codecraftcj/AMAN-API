@@ -67,8 +67,6 @@ class WaterParameter(Base):
     created_date = Column(DateTime, default=datetime.datetime.utcnow)
     db_uploaded_date = Column(DateTime, nullable=True)  # For cleanup later
 
-    device = relationship('Device', backref='water_parameters')
-
     def __init__(self, device_id, temperature, turbidity, ph_level, hydrogen_sulfide_level, db_uploaded_date=None):
         self.device_id = device_id
         self.temperature = temperature

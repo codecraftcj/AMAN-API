@@ -154,7 +154,9 @@ def get_water_parameters():
                 "turbidity": param.turbidity,
                 "ph_level": param.ph_level,
                 "hydrogen_sulfide_level": param.hydrogen_sulfide_level,
-                "created_date": param.created_date.strftime('%Y-%m-%d %H:%M:%S')
+                "created_date": param.created_date.strftime('%Y-%m-%d %H:%M:%S'),
+                "device_id": param.device_id
+                
             }
             for param in data
         ]
@@ -377,11 +379,14 @@ def confirm_device():
             return jsonify({"error": "Device not found"}), 404
 
         device_info = available_devices.pop(device_id)
-        new_device = Device(device_id=device_id, local_ip=device_info["local_ip"])
-        db_session.add(new_device)
-        db_session.commit()
-
-        return jsonify({"message": f"Device {device_id} confirmed and added"}), 200
+        response = requests.post(f"http://{device_info["local_ip"]}:8082/register")
+        if response.status_code == 200:
+            new_device = Device(device_id=device_id, local_ip=device_info["local_ip"])
+            db_session.add(new_device)
+            db_session.commit()
+            return jsonify({"message": f"Device {device_id} confirmed and added"}), 200
+        else:
+            return jsonify({"error": f"Error confirming device: {response.text}"}), 500
     except Exception as e:
         db_session.rollback()
         return jsonify({"error": str(e)}), 500
@@ -398,15 +403,21 @@ def remove_device():
 
         # Check if the device exists in the database
         device = db_session.query(Device).filter_by(device_id=device_id).first()
-
         if not device:
             return jsonify({"message": "Device not found in the database"}), 404
 
-        # Remove the device from the database
-        db_session.delete(device)
-        db_session.commit()
+        response = requests.post(f"http://{device.local_ip}:8082/unregister")
+        if response.status_code == 200:
+            # Remove the device from the database
+            print("REMOVING DEVICE")
+            available_devices[device.device_id] = {"local_ip": device.local_ip, "status": "available"}
+            print(response.content)
+            db_session.delete(device)
+            db_session.commit()
 
-        return jsonify({"message": f"Device {device_id} has been disconnected and removed"}), 200
+            return jsonify({"message": f"Device {device_id} has been disconnected and removed"}), 200
+        else:
+            return jsonify({"error": f"Error removing device: {response.text}"}), 500
     except Exception as e:
         db_session.rollback()
         return jsonify({"error": str(e)}), 500
