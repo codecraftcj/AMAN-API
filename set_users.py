@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import User, Base
+from model import User, Base
 
 # Database connection
 DATABASE_URL = "sqlite:///sqlite_dev.db"
