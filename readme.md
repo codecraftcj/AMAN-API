@@ -1,6 +1,6 @@
 ### Flask Application
 
-The Flask application is initialized in `main.py`. It sets up the routes, configures JWT for authentication, and initializes video capture for streaming.
+The Flask application is initialized in `main.py`. It sets up the routes, configures JWT for authentication, and initializes background services for monitoring devices.
 
 ## Running the Project
 
@@ -20,11 +20,13 @@ Install the required dependencies using pip:
 ```sh
 pip install -r requirements.txt
 ```
+
 ### 3. Run the Flask Application
 Start the Flask application.
 ```sh
-py main.py
+python main.py
 ```
+
 ### 4. Generate Test Data
 Run the `set_test_data.py` script to reset the database and add test data. This will drop all existing tables, recreate them, and populate the database with test users, water parameters, and devices.
 
@@ -44,9 +46,10 @@ Stores environmental data related to water quality, including temperature, turbi
 Manages scheduled tasks within the system. Each job has a name, a status indicating if it has been completed, and a timestamp for when it was created.
 
 ### Device Model
-Represents hardware devices in the system. Each device has a unique identifier, a registration status, and a timestamp for the last activity recorded.
+Represents hardware devices in the system. Each device has a unique identifier, status, local IP, and a timestamp for the last activity recorded.
 
 ---
+
 ## API Endpoints
 
 ### General Endpoints
@@ -66,6 +69,7 @@ Represents hardware devices in the system. Each device has a unique identifier, 
     ```json
     {"msg": "User created successfully"}
     ```
+
 - `POST /login` - Authenticates a user and returns a JWT token.
   - **Request Body:**
     ```json
@@ -80,7 +84,13 @@ Represents hardware devices in the system. Each device has a unique identifier, 
     ```
 
 ### Water Parameters Endpoints
-- `GET /get-water-parameters` - Retrieves the latest water quality data.
+- `POST /get-water-parameters` - Retrieves the latest water quality data.
+  - **Request Body:**
+    ```json
+    {
+      "limit": "integer"
+    }
+    ```
   - **Response:**
     ```json
     [
@@ -94,10 +104,12 @@ Represents hardware devices in the system. Each device has a unique identifier, 
       }
     ]
     ```
-- `POST /set_water_parameters` - Adds new water parameter data.
+
+- `POST /set-water-parameters` - Adds new water parameter data.
   - **Request Body:**
     ```json
     {
+      "device_id": "string",
       "temperature": "integer",
       "turbidity": "integer",
       "ph_level": "integer",
@@ -109,36 +121,104 @@ Represents hardware devices in the system. Each device has a unique identifier, 
     {"message": "Water parameters added successfully", "id": 1}
     ```
 
+- `GET /get-latest-water-parameters` - Retrieves the latest recorded water quality data.
+  - **Response:**
+    ```json
+    {
+      "id": 1,
+      "temperature": 25,
+      "turbidity": 5,
+      "ph_level": 7,
+      "hydrogen_sulfide_level": 0.2,
+      "created_date": "YYYY-MM-DD HH:MM:SS",
+      "device_id": "string"
+    }
+    ```
+
 ### Job Queue Endpoints
 - `POST /add-job` - Adds a new job to the queue.
   - **Request Body:**
     ```json
-    {"job_name": "string"}
+    {"job_name": "string", "device_id": "string"}
     ```
   - **Response:**
     ```json
     {"message": "Job added successfully", "id": 1}
     ```
+
 - `GET /get-jobs` - Retrieves all jobs.
   - **Response:**
     ```json
     [{"id": 1, "job_name": "string", "is_completed": false, "created_date": "YYYY-MM-DD HH:MM:SS"}]
     ```
 
+- `PUT /update-job/<int:job_id>` - Updates job details.
+  - **Request Body:**
+    ```json
+    {"job_name": "string", "is_completed": true}
+    ```
+  - **Response:**
+    ```json
+    {"message": "Job updated successfully"}
+    ```
+
+- `DELETE /delete-job/<int:job_id>` - Deletes a job.
+  - **Response:**
+    ```json
+    {"message": "Job deleted successfully"}
+    ```
+
 ### Device Endpoints
-- `POST /device/register` - Registers a new device.
+- `GET /devices` - Retrieves a list of all registered devices.
+  - **Response:**
+    ```json
+    [{"device_id": "string", "status": "string", "local_ip": "string"}]
+    ```
+
+- `POST /device/present` - Updates device presence status.
   - **Request Body:**
     ```json
     {"device_id": "string"}
     ```
   - **Response:**
     ```json
-    {"message": "Device registered successfully", "device_id": "string"}
+    {"message": "Device presence updated"}
     ```
-- `GET /devices` - Retrieves a list of all devices.
+
+- `POST /register_device` - Registers a new available device.
+  - **Request Body:**
+    ```json
+    {"device_id": "string", "local_ip": "string"}
+    ```
   - **Response:**
     ```json
-    [{"id": 1, "device_id": "string", "is_registered": false, "last_active": "YYYY-MM-DD HH:MM:SS"}]
+    {"message": "Device registered as available", "device_id": "string"}
+    ```
+
+- `GET /get_available_devices` - Retrieves available devices not registered in the database.
+  - **Response:**
+    ```json
+    {"device_id": {"local_ip": "string", "status": "available"}}
+    ```
+
+- `POST /confirm_device` - Confirms and adds a device to the database.
+  - **Request Body:**
+    ```json
+    {"device_id": "string"}
+    ```
+  - **Response:**
+    ```json
+    {"message": "Device confirmed and added"}
+    ```
+
+- `DELETE /remove_device` - Removes a device from the database.
+  - **Request Body:**
+    ```json
+    {"device_id": "string"}
+    ```
+  - **Response:**
+    ```json
+    {"message": "Device removed successfully"}
     ```
 
 ---
@@ -151,5 +231,3 @@ To contribute to this project, please follow these steps:
 3. Commit your changes (`git commit -m 'Add new feature'`).
 4. Push to the branch (`git push origin feature-branch`).
 5. Create a pull request.
-
-
