@@ -2,7 +2,7 @@ import cv2
 import requests
 import threading
 
-URL = "http://localhost:8080/receive-video-feed"
+URL = "http://simpleg0n-desktop:8080/receive-video-feed"
 
 cap = cv2.VideoCapture(0)  # Use webcam
 

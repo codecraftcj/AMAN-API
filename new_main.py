@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response, render_template, make_response
+from flask import Flask, request, jsonify, Response, render_template
 from repository.database import init_db, db_session
 from model.models import User, WaterParameter, JobQueue, Device
 import os
@@ -15,13 +15,10 @@ from model.DeviceConnections import DeviceConnection
 import requests
 import threading
 import time
-from flask_socketio import SocketIO, emit
-import base64
-import eventlet
-from aiortc import RTCPeerConnection, RTCSessionDescription
 
 # Initialize Database
 init_db()
+
 # Flask App Configuration
 app = Flask(__name__)
 CORS(app)
@@ -31,9 +28,13 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
 
 # Initialize JWTManager
 jwt = JWTManager(app)
+
+# Video Streaming Variables
+video_capture = cv2.VideoCapture(0)
+frame_lock = threading.Lock()
+latest_frame = None  # Stores the latest frame received
 available_devices = {}
-
-
+device_connections = {}
 
 # ================================#
 #       DEVICE MONITORING         #
@@ -52,8 +53,7 @@ def ping_devices():
                     response = requests.get(device_url, timeout=3)
                     if response.status_code == 200:
                         device_status = response.json().get("status", "unknown")
-                        device.status = device_status
-                        print(f"✅ Device {device.device_id} is {device_status} at {device.local_ip}")
+                        print(f"✅ Device {device.device_id} is {device_status}")
                     else:
                         print(f"⚠️ Device {device.device_id} did not respond. Status: {response.status_code}")
 
@@ -64,7 +64,7 @@ def ping_devices():
 
         except Exception as e:
             print(f"❌ Error in device monitoring thread: {e}")
-            
+
         time.sleep(10)  # Ping devices every 10 seconds
 
 # Start the background thread
@@ -139,12 +139,11 @@ def protected():
 # ================================#
 #     WATER PARAMETERS MODEL      #
 # ================================#
-@app.route("/get-water-parameters", methods=["POST"])
+@app.route("/get-water-parameters", methods=["GET"])
 def get_water_parameters():
     """Retrieve water parameters"""
     try:
-        data = request.get_json()
-        limit = data.get("limit", 10)  
+        limit = request.args.get("limit", default=10, type=int)  
         data = db_session.query(WaterParameter).order_by(WaterParameter.created_date.desc()).limit(limit).all()
 
         serialized_data = [
@@ -161,6 +160,7 @@ def get_water_parameters():
         return jsonify(serialized_data), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route('/set-water-parameters', methods=['POST'])
 def set_water_parameters():
@@ -187,7 +187,7 @@ def set_water_parameters():
 @app.route("/get-latest-water-parameters", methods=["GET"])
 def get_latest_water_parameters():
     try:
-        latest_param = db_session.query(WaterParameter).order_by(WaterParameter.created_date.desc()).limit(1).first()
+        latest_param = db_session.query(WaterParameter).order_by(WaterParameter.created_date.desc()).first()
         if latest_param is None:
             return jsonify({"message": "No data available"}), 404
 
@@ -198,7 +198,7 @@ def get_latest_water_parameters():
             "ph_level": latest_param.ph_level,
             "hydrogen_sulfide_level": latest_param.hydrogen_sulfide_level,
             "created_date": latest_param.created_date.strftime('%Y-%m-%d %H:%M:%S'),
-            "device_id": latest_param.device_id
+            "device_id":latest_param.device_id
         }
 
         return jsonify(serialized_data), 200
@@ -296,9 +296,10 @@ def get_devices():
         devices = db_session.query(Device).all()
         serialized_devices = [
             {
+                "id": device.id,
                 "device_id": device.device_id,
-                "status":device.status,
-                "local_ip": device.local_ip,
+                "is_registered": device.is_registered,
+                "last_active": device.last_active.strftime('%Y-%m-%d %H:%M:%S')
             }
             for device in devices
         ]
@@ -325,11 +326,9 @@ def device_present():
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
-        
 @app.route('/register_device', methods=['POST'])
 def register_device():
-    """Receives device announcements and stores them as available devices, 
-    but only if the device is not already registered in the database."""
+    """Receives device announcements and stores them as available devices."""
     try:
         data = request.get_json()
         device_id = data.get("device_id")
@@ -338,34 +337,16 @@ def register_device():
         if not device_id or not local_ip:
             return jsonify({"error": "Missing device ID or IP"}), 400
 
-        # Check if the device already exists in the database
-        existing_device = db_session.query(Device).filter_by(device_id=device_id).first()
-        if existing_device:
-            return jsonify({"message": "Device is already registered in the system"}), 200  # Conflict
-        else:
-            # If the device is not in the database, add it to available devices
-            available_devices[device_id] = {"local_ip": local_ip, "status": "available"}
-            return jsonify({"message": "Device registered as available", "device_id": device_id}), 200
+        available_devices[device_id] = {"local_ip": local_ip, "status": "available"}
+
+        return jsonify({"message": "Device registered as available", "device_id": device_id}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/get_available_devices', methods=['GET'])
 def get_available_devices():
-    """Returns a list of available devices that are not already in the database."""
-    try:
-        # Get all registered device IDs from the database
-        registered_devices = {device.device_id for device in db_session.query(Device.device_id).all()}
-
-        # Filter available devices to exclude already registered ones
-        filtered_devices = {
-            device_id: info for device_id, info in available_devices.items() if device_id not in registered_devices
-        }
-
-        return jsonify(filtered_devices), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    """Returns a list of available devices that can be registered."""
+    return jsonify(available_devices), 200
 
 @app.route('/confirm_device', methods=['POST'])
 def confirm_device():
@@ -377,6 +358,7 @@ def confirm_device():
             return jsonify({"error": "Device not found"}), 404
 
         device_info = available_devices.pop(device_id)
+        print(device_info)
         new_device = Device(device_id=device_id, local_ip=device_info["local_ip"])
         db_session.add(new_device)
         db_session.commit()
@@ -385,34 +367,9 @@ def confirm_device():
     except Exception as e:
         db_session.rollback()
         return jsonify({"error": str(e)}), 500
-
-@app.route('/remove_device', methods=['DELETE'])
-def remove_device():
-    """Disconnects a device by removing it from the database."""
-    try:
-        data = request.get_json()
-        device_id = data.get("device_id")
-
-        if not device_id:
-            return jsonify({"error": "Missing device ID"}), 400
-
-        # Check if the device exists in the database
-        device = db_session.query(Device).filter_by(device_id=device_id).first()
-
-        if not device:
-            return jsonify({"message": "Device not found in the database"}), 404
-
-        # Remove the device from the database
-        db_session.delete(device)
-        db_session.commit()
-
-        return jsonify({"message": f"Device {device_id} has been disconnected and removed"}), 200
-    except Exception as e:
-        db_session.rollback()
-        return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
-
+        
 # Start Flask App
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
