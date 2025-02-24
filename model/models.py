@@ -15,6 +15,8 @@ class User(Base):
     role = Column(String(10), nullable=False, default='user')  # 'user' or 'admin'
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Relationship to track user notifications
+    user_notifications = relationship("UserNotification", back_populates="user")
     def __init__(self, username, email, password, role="user"):
         self.username = username
         self.email = email
@@ -37,14 +39,14 @@ class Device(Base):
 
     device_id = Column(String(50), unique=True, nullable=False,primary_key=True)
     
-    local_ip = Column(String(50), nullable=True)  # Local network IP address
+    hostname = Column(String(50), nullable=True)  # Local network IP address
     status = Column(String(20), nullable=False, default='offline')  # available, offline, busy
     location = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    def __init__(self, device_id, local_ip=None, status="offline", location=None):
+    def __init__(self, device_id, hostname=None, status="offline", location=None):
         self.device_id = device_id
-        self.local_ip = local_ip
+        self.hostname = hostname
         self.status = status
         self.location = location
 
@@ -57,7 +59,7 @@ class WaterParameter(Base):
     __tablename__ = 'water_parameters'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    device_id = Column(String(255), ForeignKey('devices.device_id'), nullable=False)
+    device_id = Column(String(255), nullable=False)
 
     temperature = Column(Float, nullable=True)
     turbidity = Column(Float, nullable=True)
@@ -144,26 +146,26 @@ class JobQueue(Base):
         return f"<JobQueue(id={self.id}, device_id={self.device_id}, task={self.task_name}, status={self.status})>"
 
 
-# --- Notifications Model ---
-class Notification(Base):
-    __tablename__ = 'notifications'
+# # --- Notifications Model ---
+# class Notification(Base):
+#     __tablename__ = 'notifications'
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+#     id = Column(Integer, primary_key=True, autoincrement=True)
+#     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
 
-    message = Column(String(255), nullable=False)
-    status = Column(String(20), default='unread')  # unread, read
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+#     message = Column(String(255), nullable=False)
+#     status = Column(String(20), default='unread')  # unread, read
+#     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
-    user = relationship('User', backref='notifications')
+#     user = relationship('User', backref='notifications')
 
-    def __init__(self, user_id, message, status="unread"):
-        self.user_id = user_id
-        self.message = message
-        self.status = status
+#     def __init__(self, user_id, message, status="unread"):
+#         self.user_id = user_id
+#         self.message = message
+#         self.status = status
 
-    def __repr__(self):
-        return f"<Notification(id={self.id}, user_id={self.user_id}, status={self.status})>"
+#     def __repr__(self):
+#         return f"<Notification(id={self.id}, user_id={self.user_id}, status={self.status})>"
 
 
 # --- System Settings Model ---
@@ -180,3 +182,29 @@ class SystemSettings(Base):
 
     def __repr__(self):
         return f"<SystemSettings(id={self.id}, name={self.setting_name}, value={self.setting_value})>"
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message = Column(String(255), nullable=False)
+    details = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    system_wide = Column(Boolean, default=True)
+
+    # Fix: Establish the relationship with UserNotification
+    user_notifications = relationship("UserNotification", back_populates="notification")
+
+
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    notification_id = Column(Integer, ForeignKey("notifications.id"), nullable=False)
+    seen = Column(Boolean, default=False)  # Tracks if the notification has been read
+    seen_at = Column(DateTime, nullable=True)  # Stores the timestamp of when the notification was read
+
+    # Relationships
+    user = relationship("User", back_populates="user_notifications")
+    notification = relationship("Notification", back_populates="user_notifications")
