@@ -11,7 +11,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
-    password_hash = Column(String(128), nullable=False)
+    password_hash = Column(String(255), nullable=False)
     role = Column(String(10), nullable=False, default='user')  # 'user' or 'admin'
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -208,3 +208,18 @@ class UserNotification(Base):
     # Relationships
     user = relationship("User", back_populates="user_notifications")
     notification = relationship("Notification", back_populates="user_notifications")
+
+# --- Available Devices Model ---
+class AvailableDevice(Base):
+    __tablename__ = 'available_devices'
+
+    device_id = Column(String(50), primary_key=True, unique=True, nullable=False)
+    hostname = Column(String(50), nullable=True)  # Local network IP address
+    last_seen = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    def __init__(self, device_id, hostname=None):
+        self.device_id = device_id
+        self.hostname = hostname
+
+    def __repr__(self):
+        return f"<AvailableDevice(device_id={self.device_id}, hostname={self.hostname}, last_seen={self.last_seen})>"
