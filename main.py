@@ -27,7 +27,8 @@ def create_app():
     # Flask App Configuration
     app = Flask(__name__)
     CORS(app,supports_credentials=True)
-
+    TESTING = True # get from config
+    print(f"IS TESTING? {TESTING}" )
     app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
 
@@ -229,10 +230,15 @@ def create_app():
             try:
                 devices = db_session.query(Device).all()
                 for device in devices:
+                    
+                    if(TESTING):
+                        device.hostname = "127.0.0.1"
+                    else:
+                        device.hostname = f"{device.hostname}.local"
                     if not device.hostname:
                         continue  # Skip devices without a hostname
                     
-                    device_url = f"http://{device.hostname}.local:8082/register"  # Ping the emulator
+                    device_url = f"http://{device.hostname}:8082/register"  # Ping the emulator
                     try:
                         response = requests.post(device_url)
                         if response.status_code == 200:
@@ -284,6 +290,10 @@ def create_app():
             if device.status != "offline":  # Only notify if the status just changed
                 print(f"🚨 ALERT: Device {device.device_id} is offline!")
                 existing_device = db_session.query(Device).filter_by(device_id=device_id).first()
+                if(TESTING):
+                    device.hostname = "127.0.0.1"
+                else:
+                    device.hostname = f"{device.hostname}.local"
                 db_session.delete(existing_device)
                 # Send disconnection notification
                 new_notification = Notification(
@@ -633,14 +643,26 @@ def create_app():
         """Retrieve all registered devices"""
         try:
             devices = db_session.query(Device).all()
-            serialized_devices = [
-                {
-                    "device_id": device.device_id,
-                    "status":device.status,
-                    "hostname": device.hostname,
-                }
-                for device in devices
-            ]
+            if(TESTING):
+                    serialized_devices = [
+                        {
+                            "device_id": device.device_id,
+                            "status":device.status,
+                            "hostname": f"127.0.0.1",
+                        }
+                        for device in devices
+                    ]
+            else:
+
+                serialized_devices = [
+                    {
+                        "device_id": device.device_id,
+                        "status":device.status,
+                        "hostname": f"{device.hostname}.local",
+                    }
+                    for device in devices
+                ]
+            
             return jsonify(serialized_devices), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -713,7 +735,11 @@ def create_app():
             # Remove registered devices from available devices
             available_devices = db_session.query(AvailableDevice).all()
             print(available_devices)
-            filtered_devices = {device.device_id: {"hostname": device.hostname} for device in available_devices if device.device_id not in registered_devices}
+            if(TESTING):
+                filtered_devices = {device.device_id: {"hostname": "127.0.0.1"} for device in available_devices if device.device_id not in registered_devices}
+            
+            else:
+                filtered_devices = {device.device_id: {"hostname": device.hostname} for device in available_devices if device.device_id not in registered_devices}
             
             return jsonify(filtered_devices), 200
         except Exception as e:
@@ -734,9 +760,13 @@ def create_app():
             
             db_session.delete(available_device)
             db_session.commit()
-
+            if(TESTING):
+                available_device.hostname = "127.0.0.1"
+                # Send request to confirm the device
+            else:
+                available_device.hostname = f"{available_device.hostname}.local"
             # Send request to confirm the device
-            response = requests.post(f"http://{available_device.hostname}.local:8082/register")
+            response = requests.post(f"http://{available_device.hostname}:8082/register")
             if response.status_code == 200:
                 new_device = Device(device_id=device_id, hostname=available_device.hostname)
                 db_session.add(new_device)
@@ -763,7 +793,11 @@ def create_app():
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
 
-            response = requests.post(f"http://{device.hostname}.local:8082/unregister")
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                device.hostname = f"{device.hostname}.local"
+            response = requests.post(f"http://{device.hostname}:8082/unregister")
             if response.status_code == 200:
                 # Remove the device from the database
                 available_device = AvailableDevice(device_id=device.device_id, hostname=device.hostname)
@@ -787,10 +821,13 @@ def create_app():
             
             
             device = db_session.query(Device).filter_by(device_id=device_id).first()
-            
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
-            response = requests.get(f"http://{device.hostname}.local:8082/get-jobs")
+            response = requests.get(f"http://{device.hostname}:8082/get-jobs")
             print(response)
             jobs = json.loads(response.content)
             if not jobs:
@@ -819,13 +856,16 @@ def create_app():
 
             # Fetch device information
             device = db_session.query(Device).filter_by(device_id=device_id).first()
-
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
 
             # Send the command to the emulator
             response = requests.post(
-                f"http://{device.hostname}.local:8082/send_command",
+                f"http://{device.hostname}:8082/send_command",
                 json={"job_name": command}
             )
 
@@ -844,11 +884,14 @@ def create_app():
         try:
             # Fetch device from database
             device = db_session.query(Device).filter_by(device_id=device_id).first()
-            
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
 
-            camera_url = f"http://{device.hostname}.local:8082/camera"
+            camera_url = f"http://{device.hostname}:8082/camera"
             print(f"Proxying camera stream from: {camera_url}")
 
             # Stream camera feed directly as a proxy
@@ -877,8 +920,13 @@ def create_app():
             device = db_session.query(Device).filter_by(device_id=device_id).first()
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                device.hostname = f"{device.hostname}.local"
+            
 
-            camera_url = f"http://{device.hostname}.local:8082/camera"
+            camera_url = f"http://{device.hostname}:8082/camera"
             print(f"Capturing frame from: {camera_url}")
 
             # Capture a single frame from the camera
@@ -992,6 +1040,6 @@ app = create_app()
 # Start Flask App
 if __name__ == "__main__":
     # app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-   
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    
+    app.run(host="0.0.0.0", port=8080, debug=False)
    
