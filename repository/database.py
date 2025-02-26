@@ -8,7 +8,7 @@ user = "AMAN_INSTANCE" # Default to 'root'
 password ="amanpapasa"# Default empty (set password if configured)
 host =  "localhost" # Default to localhost
 port = "3306"  # MySQL default port
-database =  "AMAN"  # Default database (change as needed)
+database =  "AMAN_TERMINAL"  # Default database (change as needed)
 # MySQL Connection String
 connection_str = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 print(connection_str)
