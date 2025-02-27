@@ -27,7 +27,7 @@ def create_app():
     # Flask App Configuration
     app = Flask(__name__)
     CORS(app,supports_credentials=True)
-    TESTING = True # get from config
+    TESTING = False # get from config
     print(f"IS TESTING? {TESTING}" )
     app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)  # Token validity
@@ -234,7 +234,8 @@ def create_app():
                     if(TESTING):
                         device.hostname = "127.0.0.1"
                     else:
-                        device.hostname = f"{device.hostname}.local"
+                        if("local" not in device.hostname):
+                            device.hostname = f"{device.hostname}.local"
                     if not device.hostname:
                         continue  # Skip devices without a hostname
                     
@@ -293,7 +294,8 @@ def create_app():
                 if(TESTING):
                     device.hostname = "127.0.0.1"
                 else:
-                    device.hostname = f"{device.hostname}.local"
+                    if("local" not in device.hostname):
+                        device.hostname = f"{device.hostname}.local"
                 db_session.delete(existing_device)
                 # Send disconnection notification
                 new_notification = Notification(
@@ -653,15 +655,24 @@ def create_app():
                         for device in devices
                     ]
             else:
-
-                serialized_devices = [
-                    {
+                serialized_devices = []
+                for device in devices:
+                    if("local" not in device.hostname):
+                        serialized_devices.append(
+                            {
                         "device_id": device.device_id,
                         "status":device.status,
                         "hostname": f"{device.hostname}.local",
-                    }
-                    for device in devices
-                ]
+                            }
+                        )
+                    else: 
+                        serialized_devices.append(
+                            {
+                        "device_id": device.device_id,
+                        "status":device.status,
+                        "hostname": f"{device.hostname}",
+                            }
+                        )
             
             return jsonify(serialized_devices), 200
         except Exception as e:
@@ -764,7 +775,8 @@ def create_app():
                 available_device.hostname = "127.0.0.1"
                 # Send request to confirm the device
             else:
-                available_device.hostname = f"{available_device.hostname}.local"
+                if("local" not in available_device.hostname):
+                    available_device.hostname = f"{available_device.hostname}.local"
             # Send request to confirm the device
             response = requests.post(f"http://{available_device.hostname}:8082/register")
             if response.status_code == 200:
@@ -796,7 +808,8 @@ def create_app():
             if(TESTING):
                 device.hostname = "127.0.0.1"
             else:
-                device.hostname = f"{device.hostname}.local"
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
             response = requests.post(f"http://{device.hostname}:8082/unregister")
             if response.status_code == 200:
                 # Remove the device from the database
@@ -824,7 +837,8 @@ def create_app():
             if(TESTING):
                 device.hostname = "127.0.0.1"
             else:
-                device.hostname = f"{device.hostname}.local"
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
             response = requests.get(f"http://{device.hostname}:8082/get-jobs")
@@ -859,7 +873,8 @@ def create_app():
             if(TESTING):
                 device.hostname = "127.0.0.1"
             else:
-                device.hostname = f"{device.hostname}.local"
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
 
@@ -887,7 +902,8 @@ def create_app():
             if(TESTING):
                 device.hostname = "127.0.0.1"
             else:
-                device.hostname = f"{device.hostname}.local"
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
 
@@ -923,7 +939,8 @@ def create_app():
             if(TESTING):
                 device.hostname = "127.0.0.1"
             else:
-                device.hostname = f"{device.hostname}.local"
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
             
 
             camera_url = f"http://{device.hostname}:8082/camera"
