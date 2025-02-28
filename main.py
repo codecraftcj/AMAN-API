@@ -118,6 +118,7 @@ def create_app():
             print(f"Error connecting to camera: {e}")
             return None
 
+
     def process_frame(frame):
         """Detect lesions and disfigurations on fish using YOLOv8l."""
         results = model(frame, verbose=False)  # Run YOLO inference
@@ -146,7 +147,6 @@ def create_app():
             "temperature": {"min": 10, "max": 35},
             "ph_level": {"min": 4.5, "max": 9.5},
             "turbidity": {"max": 100},  # NTU
-            # "dissolved_oxygen": {"min": 2},  # mg/L
             "hydrogen_sulfide_level": {"max": 0.01},  # mg/L
             "salinity": {"min": 0.5, "max": 35, "fluctuation_threshold": 5}  # ppt
         }
@@ -174,9 +174,6 @@ def create_app():
                     "turbidity": sum(
                         1 for p in latest_params if p.turbidity > THRESHOLDS["turbidity"]["max"]
                     ),
-                    # "dissolved_oxygen": sum(
-                    #     1 for p in latest_params if p.dissolved_oxygen < THRESHOLDS["dissolved_oxygen"]["min"]
-                    # ),
                     "hydrogen_sulfide_level": sum(
                         1 for p in latest_params if p.hydrogen_sulfide_level > THRESHOLDS["hydrogen_sulfide_level"]["max"]
                     )
@@ -187,19 +184,14 @@ def create_app():
                     if count >= 30:
                         alert_message.append(f"{key.replace('_', ' ').title()} persistently unsafe for the last 5 minutes.")
 
-                # # Analyze salinity trends by checking the **total fluctuation**
-                # salinity_changes = [abs(latest_params[i].salinity - latest_params[i - 1].salinity) for i in range(1, len(latest_params))]
-                # total_salinity_fluctuation = sum(salinity_changes)
-
-                # if total_salinity_fluctuation > THRESHOLDS["salinity"]["fluctuation_threshold"]:
-                #     alert_message.append(f"⚠️ Total salinity fluctuation of {total_salinity_fluctuation:.2f} ppt over the last 5 minutes detected.")
-
-                # If any issues are detected, send a **single alert**
                 if alert_message:
                     notification_text = " ".join(alert_message)
                     print(f"📢 ALERT: {notification_text}")
 
-                    # Save to Notification Table (future implementation)
+                    # **Send notification to all users**
+                    all_users = db_session.query(User).all()
+
+                    # Create a system-wide notification
                     new_notification = Notification(
                         message="⚠️ Persistent water quality issue detected!",
                         details=notification_text,
@@ -209,11 +201,20 @@ def create_app():
                     db_session.add(new_notification)
                     db_session.commit()
 
+                    # Associate notification with all users as unread
+                    user_notifications = [
+                        UserNotification(user_id=user.id, notification_id=new_notification.id, seen=False)
+                        for user in all_users
+                    ]
+                    db_session.bulk_save_objects(user_notifications)
+                    db_session.commit()
+
+                    print("📩 System-wide notification sent to all users!")
+
             except Exception as e:
                 print(f"❌ Error in monitoring task: {e}")
 
-            time.sleep(30)  # Check every 30 seconds
-            
+            time.sleep(30)  # Check every 30 seconds 
     # ================================#
     #       DEVICE MONITORING         #
     # ================================#
@@ -325,6 +326,69 @@ def create_app():
     # ================================#
     #           USER MODEL            #
     # ================================#
+
+    @app.route("/register-user", methods=["POST"])
+    def register_user():
+        data = request.get_json()
+
+        username = data.get("username")
+        email = data.get("email")
+        password = data.get("password")
+        role = data.get("role", "user")
+
+        if not all([username, email, password]):
+            return jsonify({"msg": "Missing required fields"}), 400
+        if db_session.query(User).query.filter_by(email=email).first():
+            return jsonify({"msg": "User already exists"}), 409
+        new_user = User(username=username, email=email, password=password, role=role)
+        db_session.add(new_user)
+        db_session.commit()
+        return jsonify({"msg": "User registered successfully"}), 201
+    
+
+
+    @app.route("/delete-user/<int:user_id>", methods=["DELETE"])
+    @jwt_required()
+    def delete_user(user_id):
+        user = db_session.query(User).filter_by(id=user_id).first()
+
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+
+        db_session.delete(user)
+        db_session.commit()
+        return jsonify({"msg": "User deleted successfully"}), 200
+
+    @app.route('/logout', methods=['POST'])
+    @jwt_required()
+    def logout():
+        """Logs out the user by revoking their JWT token"""
+        response = jsonify({"message": "User logged out successfully"})
+
+        # Remove JWT from frontend by setting an empty token with an immediate expiry
+        response.set_cookie('access_token_cookie', '', expires=0, httponly=True)
+
+        return response, 200
+
+    @app.after_request
+    def after_request(response):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+
+    @app.route('/protected', methods=['GET'])
+    @jwt_required()
+    def protected():
+        """JWT protected route"""
+        current_user_id = get_jwt_identity()
+
+        user = db_session.query(User).get(current_user_id)  
+        if not user:
+            return jsonify({"msg": "User not found"}), 404  # Not Found
+
+        return jsonify(logged_in_as=user.name), 200
     @app.route("/update-user/<int:user_id>", methods=["PUT"])
     @jwt_required()
     def update_user(user_id):
@@ -341,17 +405,7 @@ def create_app():
         db_session.commit()
         return jsonify({"msg": "User updated successfully"}), 200
 
-    @app.route("/delete-user/<int:user_id>", methods=["DELETE"])
-    @jwt_required()
-    def delete_user(user_id):
-        user = db_session.query(User).filter_by(id=user_id).first()
-        
-        if not user:
-            return jsonify({"msg": "User not found"}), 404
 
-        db_session.delete(user)
-        db_session.commit()
-        return jsonify({"msg": "User deleted successfully"}), 200
     @app.route('/login', methods=['POST'])
     def login():
         """User login"""
@@ -364,7 +418,9 @@ def create_app():
             return jsonify({"msg": "Missing parameters"}), 400  # Bad Request
 
         user = db_session.query(User).filter_by(email=email).first()
-
+        print("DEBUG USER")
+        print(email)
+        print(password)
         if not user or not user.check_password(password):
             return jsonify({"msg": "Bad email or password"}), 401  # Unauthorized
 
@@ -378,17 +434,8 @@ def create_app():
         # ✅ Ensure the role is included in the response
         return jsonify(token=token, role=user.role), 200  # ✅ 'role' must be returned
 
-    @app.route('/logout', methods=['POST'])
-    @jwt_required()
-    def logout():
-        """Logs out the user by revoking their JWT token"""
-        response = jsonify({"message": "User logged out successfully"})
-        
-        # Remove JWT from frontend by setting an empty token with an immediate expiry
-        response.set_cookie('access_token_cookie', '', expires=0, httponly=True)
-        
-        return response, 200
-    @app.route('/users', methods=['GET'])
+
+    @app.route('/get-users', methods=['GET'])
     @jwt_required()
     def get_users():
         """Retrieve all users (Admin only)"""
@@ -831,29 +878,45 @@ def create_app():
             
     @app.route("/device/<string:device_id>/jobs", methods=["GET"])
     def get_device_jobs(device_id):
-        """Retrieve all jobs associated with a specific device."""
+        """Retrieve jobs associated with a specific device with pagination."""
         try:
-            # Fetch jobs related to the given device ID
-            
-            
+            # Parse optional query params
+            nth = request.args.get("nth", type=int)  # Get a single Nth row
+            start = request.args.get("start", type=int, default=0)  # Pagination start index
+            limit = request.args.get("limit", type=int, default=10)  # Number of rows to fetch
+
+            # Fetch device from the database
             device = db_session.query(Device).filter_by(device_id=device_id).first()
-            if(TESTING):
-                device.hostname = "127.0.0.1"
-            else:
-                if("local" not in device.hostname):
-                    device.hostname = f"{device.hostname}.local"
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
+
+            # Apply .local domain correction if needed
+            if TESTING:
+                device.hostname = "127.0.0.1"
+            elif "local" not in device.hostname:
+                device.hostname = f"{device.hostname}.local"
+
+            # Fetch jobs from the device API
             response = requests.get(f"http://{device.hostname}:8082/get-jobs")
-            print(response)
             jobs = json.loads(response.content)
+            jobs.reverse()
             if not jobs:
                 return jsonify({"message": "No jobs found for this device"}), 404
 
-            return jobs, 200
+            # Handle nth row retrieval
+            if nth is not None:
+                if nth < 0 or nth >= len(jobs):
+                    return jsonify({"message": "Nth row out of range"}), 400
+                return jsonify(jobs[nth]), 200
+
+            # Handle pagination
+            paginated_jobs = jobs[start : start + limit]
+            return jsonify(paginated_jobs), 200
+
         except Exception as e:
             print(e)
             return jsonify({"error": str(e)}), 500
+
 
     @app.route("/device/<string:device_id>/jobs", methods=["POST"])
     def create_device_job(device_id):
@@ -931,32 +994,24 @@ def create_app():
             print(f"Server error: {e}")
             return jsonify({"error": str(e)}), 500
 
-    @app.route("/device/<string:device_id>/model-inference", methods=["GET"])
-    def capture_and_process(device_id):
-        """Capture a single frame from the device camera, process it with YOLO, and return the image."""
+    @app.route("/device/model-inference", methods=["POST"])
+    def capture_and_process():
+        """Process an uploaded image using YOLO and return the processed image."""
         try:
-            # Fetch device from the database
-            device = db_session.query(Device).filter_by(device_id=device_id).first()
-            if not device:
-                return jsonify({"message": "Device not found in the database"}), 404
-            if(TESTING):
-                device.hostname = "127.0.0.1"
-            else:
-                if("local" not in device.hostname):
-                    device.hostname = f"{device.hostname}.local"
-            
+            if "image" not in request.files:
+                return jsonify({"error": "No image file provided"}), 400
 
-            camera_url = f"http://{device.hostname}:8082/camera"
-            print(f"Capturing frame from: {camera_url}")
+            # Read the uploaded image
+            file = request.files["image"].read()
+            np_arr = np.frombuffer(file, np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-            # Capture a single frame from the camera
-            frame = capture_single_frame(camera_url)
             if frame is None:
-                return jsonify({"error": "Failed to capture frame from camera"}), 500
+                return jsonify({"error": "Failed to process image"}), 500
 
             # Process the frame with YOLO
             processed_frame = process_frame(frame)
-            
+
             # Convert to JPEG format
             _, buffer = cv2.imencode('.jpg', processed_frame)
             image_io = BytesIO(buffer)
@@ -975,24 +1030,43 @@ def create_app():
     @app.route("/notifications/unread", methods=["GET"])
     @jwt_required()
     def get_unread_notifications_api():
-        """Retrieve all unread notifications for the authenticated user."""
+        """Retrieve unread notifications for the authenticated user with pagination."""
         user_id = get_jwt_identity()
         
-        unread_notifications = db_session.query(Notification).join(UserNotification).filter(
-            UserNotification.user_id == user_id,
-            UserNotification.seen == False
-        ).all()
+        start = request.args.get("start", default=0, type=int)  # Start index for pagination
+        limit = request.args.get("limit", default=10, type=int)  # Number of records per page
 
-        return jsonify([
-            {
-                "id": notif.id,
-                "message": notif.message,
-                "details": notif.details,
-                "created_at": notif.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                "system_wide": notif.system_wide
-            }
-            for notif in unread_notifications
-        ]), 200
+        unread_notifications = (
+            db_session.query(Notification)
+            .join(UserNotification)
+            .filter(UserNotification.user_id == user_id, UserNotification.seen == False)
+            .order_by(Notification.created_at.desc())
+            .offset(start)
+            .limit(limit)
+            .all()
+        )
+
+        total_count = (
+            db_session.query(Notification)
+            .join(UserNotification)
+            .filter(UserNotification.user_id == user_id, UserNotification.seen == False)
+            .count()
+        )
+
+        return jsonify({
+            "notifications": [
+                {
+                    "id": notif.id,
+                    "message": notif.message,
+                    "details": notif.details,
+                    "created_at": notif.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    "system_wide": notif.system_wide
+                }
+                for notif in unread_notifications
+            ],
+            "total_count": total_count
+        }), 200
+
 
 
     @app.route("/notifications/mark-seen", methods=["POST"])
