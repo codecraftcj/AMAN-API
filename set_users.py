@@ -7,7 +7,7 @@ user = "AMAN_INSTANCE"
 password = "amanpapasa"
 host = "localhost"
 port = "3306"
-database = "AMAN"
+database = "AMAN_TERMINAL"
 
 # MySQL Connection String
 connection_str = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
@@ -30,16 +30,15 @@ session = Session()
 Base.metadata.create_all(engine)
 
 # Define users
-user1 = User(username="regular_user", email="user@example.com", password="password123", role="user")
+# user1 = User(username="regular_user", email="user@example.com", password="password123", role="user")
 admin1 = User(username="admin_user", email="admin@example.com", password="adminpassword", role="admin")
 
 # Add users to session and commit
-session.add(user1)
+# session.add(user1)
 session.add(admin1)
 session.commit()
 
 print("Users created successfully:")
-print(f"User: {user1.username}, Email: {user1.email}, Role: {user1.role}")
 print(f"Admin: {admin1.username}, Email: {admin1.email}, Role: {admin1.role}")
 
 session.close()
