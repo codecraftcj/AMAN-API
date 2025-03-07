@@ -23,10 +23,28 @@ import json
 from ultralytics import YOLO
 from io import BytesIO
 
+import gspread
+from google.oauth2.service_account import Credentials
+
 def create_app():
     # Flask App Configuration
     app = Flask(__name__)
     CORS(app,supports_credentials=True)
+
+    # Google Sheets setup
+    SPREADSHEET_ID = "1Pp7UUDuid4ndNuVr90Dl8yS5cCnE2xbGRC0DH4M33M8"
+    SHEET_NAME = "Sheet1"
+
+    # Load credentials
+    creds = Credentials.from_service_account_file(
+        "awesome-shore-452919-v5-84bbfa75a0ee.json",
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"]
+    )
+
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    sheet = spreadsheet.worksheet(SHEET_NAME)
     TESTING = False # get from config
     print(f"IS TESTING? {TESTING}" )
     app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
@@ -43,8 +61,75 @@ def create_app():
 
     # Initialize JWTManager
     jwt = JWTManager(app)
-    available_devices = {}
 
+
+        # Function to check if /dev/video0 is available
+    def is_video_device_available(device_path="/dev/video0"):
+        return os.path.exists(device_path)
+
+    # Function to list available cameras
+    def list_available_cameras(max_test=5):
+        available_cameras = []
+        for index in range(max_test):
+            cap = cv2.VideoCapture(index)
+            if cap.isOpened():
+                available_cameras.append(index)
+                cap.release()
+        return available_cameras
+
+    # Check if /dev/video0 is available, otherwise list available cameras
+    if is_video_device_available("/dev/video0"):
+        camera_index = 0
+        print("Using /dev/video0 as the default camera.")
+    else:
+        cameras = list_available_cameras()
+        if not cameras:
+            print("No cameras found. Please check your connections.")
+            exit()
+        camera_index = cameras[0]  # Use the first available camera
+        print(f"/dev/video0 not found. Using camera {camera_index}")
+
+    # Load YOLO model
+    model_path = "models/best.pt"
+    if not os.path.exists(model_path):
+        print(f"Error: Model file '{model_path}' not found.")
+        exit()
+
+    print(f"Using {model_path}")
+    model = YOLO(model_path)  # Load trained YOLO model
+
+    # Define class labels
+    class_names = [
+        "Bacterial diseases - Aeromoniasis", "Bacterial gill disease", "Bacterial Red disease",
+        "Fungal diseases Saprolegniasis", "Healthy Fish", "Parasitic diseases",
+        "Viral diseases White tail disease"
+    ]
+
+    # Open the selected camera
+    cap = cv2.VideoCapture(camera_index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    if not cap.isOpened():
+        print(f"Error: Could not open camera {camera_index}.")
+        exit()
+
+
+    def generate_raw_frames():
+        """ Continuously capture frames and yield them as a raw video stream """
+        while True:
+            success, frame = cap.read()
+            if not success:
+                print("Error: Failed to capture frame.")
+                break
+
+            # Encode frame as JPEG
+            _, buffer = cv2.imencode('.jpg', frame)
+            frame_bytes = buffer.tobytes()
+
+            # Yield as MJPEG stream
+            yield (b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
     def get_unread_notifications(user_id):
         """Fetch all unread notifications for a given user."""
@@ -52,6 +137,28 @@ def create_app():
             UserNotification.user_id == user_id,
             UserNotification.seen == False
         ).all()
+
+    def validate_schedule(schedule):
+        """Validate the structure of the feeding schedule."""
+        required_keys = {"habit", "start_time", "end_time"}
+        if not all(key in schedule for key in required_keys):
+            return False
+
+        habit = schedule.get("habit", {})
+        if not isinstance(habit, dict) or "minute_interval" not in habit or "days" not in habit:
+            return False
+        
+        if not isinstance(habit["minute_interval"], int) or habit["minute_interval"] <= 0:
+            return False
+        
+        days = habit.get("days", {})
+        if not isinstance(days, dict) or not all(isinstance(v, bool) for v in days.values()):
+            return False
+        
+        if not isinstance(schedule["start_time"], str) or not isinstance(schedule["end_time"], str):
+            return False
+
+        return True
 
     def mark_notification_as_seen(user_id, notification_id):
         """Mark a specific notification as read for a user."""
@@ -86,60 +193,6 @@ def create_app():
         db_session.commit()
         print(f"📩 Notification sent to User {user_id}")
 
-    # Load YOLO model (optimized for Raspberry Pi)
-    MODEL_PATH = "models/yolov8l.pt"
-    model = YOLO(MODEL_PATH)
-
-    def capture_single_frame(camera_url):
-        """Fetch a single frame from the MJPEG stream of the device camera."""
-        try:
-            # Request the stream and read a single frame
-            response = requests.get(camera_url, stream=True, timeout=5)
-
-            if response.status_code != 200:
-                print(f"Failed to fetch camera stream, status code: {response.status_code}")
-                return None
-
-            # Read the stream to extract a frame
-            bytes_data = bytes()
-            for chunk in response.iter_content(chunk_size=1024):
-                bytes_data += chunk
-                a = bytes_data.find(b'\xff\xd8')  # JPEG start
-                b = bytes_data.find(b'\xff\xd9')  # JPEG end
-                if a != -1 and b != -1:
-                    jpg = bytes_data[a:b+2]
-                    bytes_data = bytes_data[b+2:]
-                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                    return frame  # Return the extracted frame
-
-            print("No valid frame found in stream.")
-            return None
-        except requests.RequestException as e:
-            print(f"Error connecting to camera: {e}")
-            return None
-
-
-    def process_frame(frame):
-        """Detect lesions and disfigurations on fish using YOLOv8l."""
-        results = model(frame, verbose=False)  # Run YOLO inference
-
-        for result in results:
-            for box in result.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box coordinates
-                confidence = box.conf[0].item()  # Confidence score
-                class_id = int(box.cls[0])  # Class index
-                label = f"{model.names[class_id]} {confidence:.2f}"  # Class label
-
-                # Define bounding box color: Red for lesions, Green for healthy fish
-                color = (0, 0, 255) if class_id == 1 else (0, 255, 0)  # Red for lesion, Green for healthy
-
-                # Draw bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                
-                # Draw label text
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        return frame
 
     def monitor_water_parameters():
         """Continuously monitors water quality trends over the last 5 minutes and sends alerts if necessary."""
@@ -606,6 +659,47 @@ def create_app():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
         
+    @app.route("/update-water-parameters-gsheet", methods=["POST"])
+    def update_water_parameters():
+        """Receives latest water parameters JSON and updates Google Sheets with new records."""
+        try:
+            data = request.get_json()  # Get JSON payload
+
+            if not isinstance(data, list):
+                return jsonify({"error": "Invalid data format, expected a list"}), 400
+
+            # Fetch all existing IDs from the sheet
+            existing_ids = set()
+            existing_data = sheet.get_all_values()
+
+            # Skip header row (assuming first row contains headers)
+            for row in existing_data[1:]:  
+                if row:  
+                    existing_ids.add(row[0])  # Assuming 'id' is the first column
+
+            # Prepare new records (if ID is not already in the sheet)
+            new_records = []
+            for param in data:
+                if str(param["id"]) not in existing_ids:  # Ensure unique records
+                    new_records.append([
+                        param["id"],
+                        param["device_id"],
+                        param["temperature"],
+                        param["ph_level"],
+                        param["turbidity"],
+                        param["hydrogen_sulfide_level"],
+                        param["created_date"]
+                    ])
+
+            # Append only new records
+            if new_records:
+                sheet.append_rows(new_records)
+                return jsonify({"message": f"Added {len(new_records)} new records to Google Sheets."}), 200
+            else:
+                return jsonify({"message": "No new records to add."}), 200
+
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     # ================================#
     #         JOB QUEUE MODEL         #
     # ================================#
@@ -690,6 +784,23 @@ def create_app():
     # ================================#
     #         DEVICE MODEL            #
     # ================================#
+    @app.route('/device/<device_id>/overview', methods=['GET'])
+    def get_device_overview(device_id):
+        """Fetch device overview details including sensor status and values"""
+        try:
+            device = db_session.query(Device).filter_by(device_id=device_id).first()
+            if not device:
+                return jsonify({"error": "Device not found"}), 404
+
+            overview_data = {
+                "device_id": device.device_id,
+                "hostname": device.hostname,
+                "status": device.status,
+            }
+            return jsonify(overview_data), 200
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     @app.route("/devices", methods=["GET"])
     def get_devices():
         """Retrieve all registered devices"""
@@ -833,6 +944,8 @@ def create_app():
                 new_device = Device(device_id=device_id, hostname=available_device.hostname)
                 db_session.add(new_device)
                 db_session.commit()
+                print("CONFIRMED DEVICE ID")
+                print(device_id)
                 return jsonify({"message": f"Device {device_id} confirmed and added"}), 200
             else:
                 return jsonify({"error": f"Error confirming device: {response.text}"}), 500
@@ -918,6 +1031,78 @@ def create_app():
             return jsonify({"error": str(e)}), 500
 
 
+    @app.route("/device/<string:device_id>/feeding-schedule", methods=["POST"])
+    def set_device_feeding_schedule(device_id):
+        """Send a job command to a specific device."""
+        try:
+            data = request.json
+
+            if not data or "schedule" not in data or not validate_schedule(data["schedule"]):
+                return jsonify({"error": "Invalid request, 'schedule' is required and must be valid"}), 400
+            schedule = data["schedule"]
+            print("SCHEDULE")
+            print({"schedule": schedule})
+            
+
+            # Fetch device information
+            device = db_session.query(Device).filter_by(device_id=device_id).first()
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
+            print("TARGET HOSTNAME")
+            print(device.hostname)
+            if not device:
+                return jsonify({"message": "Device not found in the database"}), 404
+
+            
+            # Send the command to the emulator
+            response = requests.post(
+                f"http://{device.hostname}:8082/feeding-schedule",
+                json={"schedule": schedule}
+            )
+
+            if response.status_code != 200:
+                return jsonify({"error": "Failed to set device schedule"}), response.status_code
+
+            return jsonify({"message": "Schedule successfully set", "response": response.json()}), 200
+
+        except Exception as e:
+            print(e)
+            return jsonify({"error": str(e)}), 500
+        
+    @app.route("/device/<string:device_id>/feeding-schedule", methods=["GET"])
+    def get_device_feeding_schedule(device_id):
+        """Send a job command to a specific device."""
+        try:
+            
+            # Fetch device information
+            device = db_session.query(Device).filter_by(device_id=device_id).first()
+            if(TESTING):
+                device.hostname = "127.0.0.1"
+            else:
+                if("local" not in device.hostname):
+                    device.hostname = f"{device.hostname}.local"
+            print("TARGET HOSTNAME")
+            print(device.hostname)
+            if not device:
+                return jsonify({"message": "Device not found in the database"}), 404
+
+            # Send the command to the emulator
+            response = requests.get(
+                f"http://{device.hostname}:8082/feeding-schedule"
+            )
+
+            if response.status_code != 200:
+                return jsonify({"error": "Failed to get device schedule"}), response.status_code
+
+            return jsonify({"message": "Schedule successfully acquired", "response": response.json()}), 200
+
+        except Exception as e:
+            print(e)
+            return jsonify({"error": str(e)}), 500
+        
     @app.route("/device/<string:device_id>/jobs", methods=["POST"])
     def create_device_job(device_id):
         """Send a job command to a specific device."""
@@ -941,6 +1126,8 @@ def create_app():
             else:
                 if("local" not in device.hostname):
                     device.hostname = f"{device.hostname}.local"
+            print("TARGET HOSTNAME")
+            print(device.hostname)
             if not device:
                 return jsonify({"message": "Device not found in the database"}), 404
 
@@ -1023,6 +1210,62 @@ def create_app():
             print(f"Error processing frame: {e}")
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/detect', methods=['POST'])
+    def detect():
+        """ Process an uploaded image and return the detected image """
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file provided"}), 400
+
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+
+        # Read image from request
+        image_np = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return jsonify({"error": "Invalid image format"}), 400
+
+        # Run YOLO detection
+        results = model(img)
+
+        # Process detections
+        for result in results:
+            if result.boxes is not None and len(result.boxes.xyxy) > 0:
+                for box in result.boxes.data:
+                    x1, y1, x2, y2, conf, cls = map(float, box[:6])
+
+                    # Convert to integer for OpenCV drawing
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    conf = round(conf, 2)
+                    cls = int(cls)
+
+                    # Get class label
+                    class_label = class_names[cls] if cls < len(class_names) else f"Unknown ({cls})"
+
+                    # Draw bounding box
+                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                    # Display label
+                    label = f"{class_label}: {conf:.2f}"
+                    text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                    text_x = x1
+                    text_y = max(y1 - 10, 20)  # Ensure text is within frame
+
+                    # Draw label background
+                    cv2.rectangle(img, (text_x - 2, text_y - text_size[1] - 2),
+                                (text_x + text_size[0] + 2, text_y + 2), (0, 255, 0), -1)
+                    
+                    # Draw text
+                    cv2.putText(img, label, (text_x, text_y),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+
+        # Save processed image
+        output_path = "static/detected_image.jpg"
+        cv2.imwrite(output_path, img)
+
+        return send_file(output_path, mimetype='image/jpeg')
     # ================================#
     #       NOTIFICATIONS API         #
     # ================================#
@@ -1127,6 +1370,11 @@ def create_app():
         db_session.commit()
 
         return jsonify({"message": f"Notification sent to user {user_id}"}), 201
+    @app.route('/video_feed')
+    def video_feed():
+        """ Video streaming route (Raw camera feed) """
+        return Response(generate_raw_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
     return app
 # Gunicorn WSGI Entry Point
 app = create_app()
