@@ -25,12 +25,33 @@ from io import BytesIO
 
 import gspread
 from google.oauth2.service_account import Credentials
+import subprocess
+
+def check_internet():
+    """Check internet connectivity by pinging Google's DNS."""
+    try:
+        subprocess.run(["ping", "-c", "1", "8.8.8.8"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        print("INTERNET DETECTED")
+        return True
+    except subprocess.CalledProcessError:
+        print("NO INTERNET")
+        return False
+
+def monitor_internet():
+    """Continuously check for internet connectivity every 5 seconds and update the gsheet flag."""
+    global enable_gsheet
+    while True:
+        enable_gsheet = check_internet()
+        print(f"Internet Status: {'Connected ✅' if enable_gsheet else 'Disconnected ❌'}")
+        time.sleep(5)  # Check every 5 seconds
 
 def create_app():
     # Flask App Configuration
     app = Flask(__name__)
     CORS(app,supports_credentials=True)
 
+    internet_thread = threading.Thread(target=monitor_internet, daemon=True)
+    internet_thread.start()
     # Google Sheets setup
     SPREADSHEET_ID = "1Pp7UUDuid4ndNuVr90Dl8yS5cCnE2xbGRC0DH4M33M8"
     SHEET_NAME = "Sheet1"
@@ -42,9 +63,12 @@ def create_app():
                 "https://www.googleapis.com/auth/drive"]
     )
 
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
-    sheet = spreadsheet.worksheet(SHEET_NAME)
+    # Global flag for Google Sheets integration
+    global enable_gsheet
+    enable_gsheet = check_internet()
+
+
+        
     TESTING = False # get from config
     print(f"IS TESTING? {TESTING}" )
     app.config['JWT_SECRET_KEY'] = 'your-secure-secret-key'  # Change this!
@@ -391,7 +415,7 @@ def create_app():
 
         if not all([username, email, password]):
             return jsonify({"msg": "Missing required fields"}), 400
-        if db_session.query(User).query.filter_by(email=email).first():
+        if db_session.query(User).filter_by(email=email).first():
             return jsonify({"msg": "User already exists"}), 409
         new_user = User(username=username, email=email, password=password, role=role)
         db_session.add(new_user)
@@ -660,44 +684,57 @@ def create_app():
             return jsonify({"error": str(e)}), 500
         
     @app.route("/update-water-parameters-gsheet", methods=["POST"])
-    def update_water_parameters():
+    def update_water_parameters_gsheet():
         """Receives latest water parameters JSON and updates Google Sheets with new records."""
         try:
-            data = request.get_json()  # Get JSON payload
+            if enable_gsheet:
+                client = gspread.authorize(creds)
+                spreadsheet = client.open_by_key(SPREADSHEET_ID)
+                sheet = spreadsheet.worksheet(SHEET_NAME)
+                data = request.get_json()  # Get JSON payload
 
-            if not isinstance(data, list):
-                return jsonify({"error": "Invalid data format, expected a list"}), 400
+                if not isinstance(data, list):
+                    return jsonify({"error": "Invalid data format, expected a list"}), 400
 
-            # Fetch all existing IDs from the sheet
-            existing_ids = set()
-            existing_data = sheet.get_all_values()
+                # Define expected headers
+                expected_headers = [
+                    "id", "device_id", "temperature", "ph_level", 
+                    "turbidity", "hydrogen_sulfide_level", "created_date"
+                ]
 
-            # Skip header row (assuming first row contains headers)
-            for row in existing_data[1:]:  
-                if row:  
-                    existing_ids.add(row[0])  # Assuming 'id' is the first column
+                # Get current sheet values
+                existing_data = sheet.get_all_values()
 
-            # Prepare new records (if ID is not already in the sheet)
-            new_records = []
-            for param in data:
-                if str(param["id"]) not in existing_ids:  # Ensure unique records
-                    new_records.append([
-                        param["id"],
-                        param["device_id"],
-                        param["temperature"],
-                        param["ph_level"],
-                        param["turbidity"],
-                        param["hydrogen_sulfide_level"],
-                        param["created_date"]
-                    ])
+                # Check and set headers if missing
+                if not existing_data or existing_data[0] != expected_headers:
+                    sheet.insert_row(expected_headers, 1)  # Ensure headers are in row 1
+                    existing_data = sheet.get_all_values()  # Re-fetch data
 
-            # Append only new records
-            if new_records:
-                sheet.append_rows(new_records)
-                return jsonify({"message": f"Added {len(new_records)} new records to Google Sheets."}), 200
+                # Fetch existing IDs (skip header row)
+                existing_ids = {row[0] for row in existing_data[1:] if row}  # ID is assumed to be in the first column
+
+                # Prepare new records (only unique ones)
+                new_records = []
+                for param in data:
+                    if str(param["id"]) not in existing_ids:  # Ensure unique records
+                        new_records.append([
+                            param["id"],
+                            param["device_id"],
+                            param["temperature"],
+                            param["ph_level"],
+                            param["turbidity"],
+                            param["hydrogen_sulfide_level"],
+                            param["created_date"]
+                        ])
+
+                # Append only new records
+                if new_records:
+                    sheet.append_rows(new_records, value_input_option="RAW")
+                    return jsonify({"message": f"Added {len(new_records)} new records to Google Sheets."}), 200
+                else:
+                    return jsonify({"message": "No new records to add."}), 200
             else:
-                return jsonify({"message": "No new records to add."}), 200
-
+                return jsonify({"No Internet Connection": str(e)}), 404
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     # ================================#
@@ -927,6 +964,7 @@ def create_app():
 
             # Check if the device exists in available devices and remove it
             available_device = db_session.query(AvailableDevice).filter_by(device_id=device_id).first()
+            print(device_id)
             if not available_device:
                 return jsonify({"error": "Device not found"}), 404
             
